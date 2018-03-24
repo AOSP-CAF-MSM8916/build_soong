@@ -111,6 +111,11 @@ type variableProperties struct {
 			Cppflags []string
 		}
 
+		Uses_qti_camera_device struct {
+			Cppflags []string
+			Shared_libs []string
+		}
+
 		Uses_qcom_bsp_legacy struct {
 			Cflags []string
 		}
@@ -192,6 +197,7 @@ type productVariables struct {
 	Needs_legacy_camera_hal1_dyn_native_handle  *bool `json:",omitempty"`
 	Needs_text_relocations *bool `json:",omitempty"`
 	Target_shim_libs *string `json:",omitempty"`
+	Uses_qti_camera_device  *bool `json:",omitempty"`
 	Uses_qcom_bsp_legacy *bool `json:",omitempty"`
 }
 
