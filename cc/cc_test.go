@@ -258,7 +258,8 @@ func checkVndkModule(t *testing.T, ctx *android.TestContext, name, subDir string
 	}
 }
 
-func checkSnapshot(t *testing.T, ctx *android.TestContext, singleton android.TestingSingleton, moduleName, snapshotFilename, subDir, variant string) {
+func checkSnapshotIncludeExclude(t *testing.T, ctx *android.TestContext, singleton android.TestingSingleton, moduleName, snapshotFilename, subDir, variant string, include bool, fake bool) {
+	t.Helper()
 	mod, ok := ctx.ModuleForTests(moduleName, variant).Module().(android.OutputFileProducer)
 	if !ok {
 		t.Errorf("%q must have output\n", moduleName)
@@ -271,10 +272,35 @@ func checkSnapshot(t *testing.T, ctx *android.TestContext, singleton android.Tes
 	}
 	snapshotPath := filepath.Join(subDir, snapshotFilename)
 
-	out := singleton.Output(snapshotPath)
-	if out.Input.String() != outputFiles[0].String() {
-		t.Errorf("The input of snapshot %q must be %q, but %q", moduleName, out.Input.String(), outputFiles[0])
+	if include {
+		out := singleton.Output(snapshotPath)
+		if fake {
+			if out.Rule == nil {
+				t.Errorf("Missing rule for module %q output file %q", moduleName, outputFiles[0])
+			}
+		} else {
+			if out.Input.String() != outputFiles[0].String() {
+				t.Errorf("The input of snapshot %q must be %q, but %q", moduleName, out.Input.String(), outputFiles[0])
+			}
+		}
+	} else {
+		out := singleton.MaybeOutput(snapshotPath)
+		if out.Rule != nil {
+			t.Errorf("There must be no rule for module %q output file %q", moduleName, outputFiles[0])
+		}
 	}
+}
+
+func checkSnapshot(t *testing.T, ctx *android.TestContext, singleton android.TestingSingleton, moduleName, snapshotFilename, subDir, variant string) {
+	checkSnapshotIncludeExclude(t, ctx, singleton, moduleName, snapshotFilename, subDir, variant, true, false)
+}
+
+func checkSnapshotExclude(t *testing.T, ctx *android.TestContext, singleton android.TestingSingleton, moduleName, snapshotFilename, subDir, variant string) {
+	checkSnapshotIncludeExclude(t, ctx, singleton, moduleName, snapshotFilename, subDir, variant, false, false)
+}
+
+func checkSnapshotRule(t *testing.T, ctx *android.TestContext, singleton android.TestingSingleton, moduleName, snapshotFilename, subDir, variant string) {
+	checkSnapshotIncludeExclude(t, ctx, singleton, moduleName, snapshotFilename, subDir, variant, true, true)
 }
 
 func checkWriteFileOutput(t *testing.T, params android.TestingBuildParams, expected []string) {
@@ -831,172 +857,6 @@ func TestDoubleLoadbleDep(t *testing.T) {
 			double_loadable: true,
 		}
 	`)
-}
-
-func TestVendorSnapshot(t *testing.T) {
-	bp := `
-	cc_library {
-		name: "libvndk",
-		vendor_available: true,
-		vndk: {
-			enabled: true,
-		},
-		nocrt: true,
-	}
-
-	cc_library {
-		name: "libvendor",
-		vendor: true,
-		nocrt: true,
-	}
-
-	cc_library {
-		name: "libvendor_available",
-		vendor_available: true,
-		nocrt: true,
-	}
-
-	cc_library_headers {
-		name: "libvendor_headers",
-		vendor_available: true,
-		nocrt: true,
-	}
-
-	cc_binary {
-		name: "vendor_bin",
-		vendor: true,
-		nocrt: true,
-	}
-
-	cc_binary {
-		name: "vendor_available_bin",
-		vendor_available: true,
-		nocrt: true,
-	}
-
-	toolchain_library {
-		name: "libb",
-		vendor_available: true,
-		src: "libb.a",
-	}
-
-	cc_object {
-		name: "obj",
-		vendor_available: true,
-	}
-`
-	config := TestConfig(buildDir, android.Android, nil, bp, nil)
-	config.TestProductVariables.DeviceVndkVersion = StringPtr("current")
-	config.TestProductVariables.Platform_vndk_version = StringPtr("VER")
-	ctx := testCcWithConfig(t, config)
-
-	// Check Vendor snapshot output.
-
-	snapshotDir := "vendor-snapshot"
-	snapshotVariantPath := filepath.Join(buildDir, snapshotDir, "arm64")
-	snapshotSingleton := ctx.SingletonForTests("vendor-snapshot")
-
-	var jsonFiles []string
-
-	for _, arch := range [][]string{
-		[]string{"arm64", "armv8-a"},
-		[]string{"arm", "armv7-a-neon"},
-	} {
-		archType := arch[0]
-		archVariant := arch[1]
-		archDir := fmt.Sprintf("arch-%s-%s", archType, archVariant)
-
-		// For shared libraries, only non-VNDK vendor_available modules are captured
-		sharedVariant := fmt.Sprintf("android_vendor.VER_%s_%s_shared", archType, archVariant)
-		sharedDir := filepath.Join(snapshotVariantPath, archDir, "shared")
-		checkSnapshot(t, ctx, snapshotSingleton, "libvendor", "libvendor.so", sharedDir, sharedVariant)
-		checkSnapshot(t, ctx, snapshotSingleton, "libvendor_available", "libvendor_available.so", sharedDir, sharedVariant)
-		jsonFiles = append(jsonFiles,
-			filepath.Join(sharedDir, "libvendor.so.json"),
-			filepath.Join(sharedDir, "libvendor_available.so.json"))
-
-		// For static libraries, all vendor:true and vendor_available modules (including VNDK) are captured.
-		// Also cfi variants are captured, except for prebuilts like toolchain_library
-		staticVariant := fmt.Sprintf("android_vendor.VER_%s_%s_static", archType, archVariant)
-		staticCfiVariant := fmt.Sprintf("android_vendor.VER_%s_%s_static_cfi", archType, archVariant)
-		staticDir := filepath.Join(snapshotVariantPath, archDir, "static")
-		checkSnapshot(t, ctx, snapshotSingleton, "libb", "libb.a", staticDir, staticVariant)
-		checkSnapshot(t, ctx, snapshotSingleton, "libvndk", "libvndk.a", staticDir, staticVariant)
-		checkSnapshot(t, ctx, snapshotSingleton, "libvndk", "libvndk.cfi.a", staticDir, staticCfiVariant)
-		checkSnapshot(t, ctx, snapshotSingleton, "libvendor", "libvendor.a", staticDir, staticVariant)
-		checkSnapshot(t, ctx, snapshotSingleton, "libvendor", "libvendor.cfi.a", staticDir, staticCfiVariant)
-		checkSnapshot(t, ctx, snapshotSingleton, "libvendor_available", "libvendor_available.a", staticDir, staticVariant)
-		checkSnapshot(t, ctx, snapshotSingleton, "libvendor_available", "libvendor_available.cfi.a", staticDir, staticCfiVariant)
-		jsonFiles = append(jsonFiles,
-			filepath.Join(staticDir, "libb.a.json"),
-			filepath.Join(staticDir, "libvndk.a.json"),
-			filepath.Join(staticDir, "libvndk.cfi.a.json"),
-			filepath.Join(staticDir, "libvendor.a.json"),
-			filepath.Join(staticDir, "libvendor.cfi.a.json"),
-			filepath.Join(staticDir, "libvendor_available.a.json"),
-			filepath.Join(staticDir, "libvendor_available.cfi.a.json"))
-
-		// For binary executables, all vendor:true and vendor_available modules are captured.
-		if archType == "arm64" {
-			binaryVariant := fmt.Sprintf("android_vendor.VER_%s_%s", archType, archVariant)
-			binaryDir := filepath.Join(snapshotVariantPath, archDir, "binary")
-			checkSnapshot(t, ctx, snapshotSingleton, "vendor_bin", "vendor_bin", binaryDir, binaryVariant)
-			checkSnapshot(t, ctx, snapshotSingleton, "vendor_available_bin", "vendor_available_bin", binaryDir, binaryVariant)
-			jsonFiles = append(jsonFiles,
-				filepath.Join(binaryDir, "vendor_bin.json"),
-				filepath.Join(binaryDir, "vendor_available_bin.json"))
-		}
-
-		// For header libraries, all vendor:true and vendor_available modules are captured.
-		headerDir := filepath.Join(snapshotVariantPath, archDir, "header")
-		jsonFiles = append(jsonFiles, filepath.Join(headerDir, "libvendor_headers.json"))
-
-		// For object modules, all vendor:true and vendor_available modules are captured.
-		objectVariant := fmt.Sprintf("android_vendor.VER_%s_%s", archType, archVariant)
-		objectDir := filepath.Join(snapshotVariantPath, archDir, "object")
-		checkSnapshot(t, ctx, snapshotSingleton, "obj", "obj.o", objectDir, objectVariant)
-		jsonFiles = append(jsonFiles, filepath.Join(objectDir, "obj.o.json"))
-	}
-
-	for _, jsonFile := range jsonFiles {
-		// verify all json files exist
-		if snapshotSingleton.MaybeOutput(jsonFile).Rule == nil {
-			t.Errorf("%q expected but not found", jsonFile)
-		}
-	}
-}
-
-func TestVendorSnapshotSanitizer(t *testing.T) {
-	bp := `
-	vendor_snapshot_static {
-		name: "libsnapshot",
-		vendor: true,
-		target_arch: "arm64",
-		version: "BOARD",
-		arch: {
-			arm64: {
-				src: "libsnapshot.a",
-				cfi: {
-					src: "libsnapshot.cfi.a",
-				}
-			},
-		},
-	}
-`
-	config := TestConfig(buildDir, android.Android, nil, bp, nil)
-	config.TestProductVariables.DeviceVndkVersion = StringPtr("BOARD")
-	config.TestProductVariables.Platform_vndk_version = StringPtr("VER")
-	ctx := testCcWithConfig(t, config)
-
-	// Check non-cfi and cfi variant.
-	staticVariant := "android_vendor.BOARD_arm64_armv8-a_static"
-	staticCfiVariant := "android_vendor.BOARD_arm64_armv8-a_static_cfi"
-
-	staticModule := ctx.ModuleForTests("libsnapshot.vendor_static.BOARD.arm64", staticVariant).Module().(*Module)
-	assertString(t, staticModule.outputFile.Path().Base(), "libsnapshot.a")
-
-	staticCfiModule := ctx.ModuleForTests("libsnapshot.vendor_static.BOARD.arm64", staticCfiVariant).Module().(*Module)
-	assertString(t, staticCfiModule.outputFile.Path().Base(), "libsnapshot.cfi.a")
 }
 
 func TestDoubleLoadableDepError(t *testing.T) {

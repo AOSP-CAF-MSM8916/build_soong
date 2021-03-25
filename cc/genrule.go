@@ -69,7 +69,15 @@ func (g *GenruleExtraProperties) RamdiskVariantNeeded(ctx android.BaseModuleCont
 }
 
 func (g *GenruleExtraProperties) RecoveryVariantNeeded(ctx android.BaseModuleContext) bool {
-	return Bool(g.Recovery_available)
+	// If the build is using a snapshot, the recovery variant under AOSP directories
+	// is not needed.
+	recoverySnapshotVersion := ctx.DeviceConfig().RecoverySnapshotVersion()
+	if recoverySnapshotVersion != "current" && recoverySnapshotVersion != "" &&
+		!isRecoveryProprietaryModule(ctx) {
+		return false
+	} else {
+		return Bool(g.Recovery_available)
+	}
 }
 
 func (g *GenruleExtraProperties) ExtraImageVariations(ctx android.BaseModuleContext) []string {
@@ -84,7 +92,7 @@ func (g *GenruleExtraProperties) ExtraImageVariations(ctx android.BaseModuleCont
 		// If not, we assume modules under proprietary paths are compatible for
 		// BOARD_VNDK_VERSION. The other modules are regarded as AOSP, that is
 		// PLATFORM_VNDK_VERSION.
-		if vndkVersion == "current" || !isVendorProprietaryPath(ctx.ModuleDir()) {
+		if vndkVersion == "current" || !isVendorProprietaryModule(ctx) {
 			variants = append(variants, VendorVariationPrefix+ctx.DeviceConfig().PlatformVndkVersion())
 		} else {
 			variants = append(variants, VendorVariationPrefix+vndkVersion)

@@ -54,18 +54,16 @@ func DumpMakeVars(ctx Context, config Config, goals, vars []string) (map[string]
 
 	var ret map[string]string
 	if len(makeVars) > 0 {
+		// It's not safe to use the same TMPDIR as the build, as that can be removed.
 		tmpDir, err := ioutil.TempDir("", "dumpvars")
 		if err != nil {
 			return nil, err
 		}
 		defer os.RemoveAll(tmpDir)
 
-		// It's not safe to use the same TMPDIR as the build, as that can be removed.
-		config.Environment().Set("TMPDIR", tmpDir)
+		SetupLitePath(ctx, config, tmpDir)
 
-		SetupLitePath(ctx, config)
-
-		ret, err = dumpMakeVars(ctx, config, goals, makeVars, false)
+		ret, err = dumpMakeVars(ctx, config, goals, makeVars, false, tmpDir)
 		if err != nil {
 			return ret, err
 		}
@@ -82,7 +80,7 @@ func DumpMakeVars(ctx Context, config Config, goals, vars []string) (map[string]
 	return ret, nil
 }
 
-func dumpMakeVars(ctx Context, config Config, goals, vars []string, write_soong_vars bool) (map[string]string, error) {
+func dumpMakeVars(ctx Context, config Config, goals, vars []string, write_soong_vars bool, tmpDir string) (map[string]string, error) {
 	ctx.BeginTrace(metrics.RunKati, "dumpvars")
 	defer ctx.EndTrace()
 
@@ -98,6 +96,9 @@ func dumpMakeVars(ctx Context, config Config, goals, vars []string, write_soong_
 		cmd.Environment.Set("WRITE_SOONG_VARIABLES", "true")
 	}
 	cmd.Environment.Set("DUMP_MANY_VARS", strings.Join(vars, " "))
+	if tmpDir != "" {
+		cmd.Environment.Set("TMPDIR", tmpDir)
+	}
 	cmd.Sandbox = dumpvarsSandbox
 	output := bytes.Buffer{}
 	cmd.Stdout = &output
@@ -138,6 +139,9 @@ func dumpMakeVars(ctx Context, config Config, goals, vars []string, write_soong_
 var BannerVars = []string{
 	"PLATFORM_VERSION_CODENAME",
 	"PLATFORM_VERSION",
+	"ONE_VERSION",
+	"ONE_TYPE",
+	"WITH_GAPPS",
 	"TARGET_PRODUCT",
 	"TARGET_BUILD_VARIANT",
 	"TARGET_BUILD_TYPE",
@@ -162,6 +166,12 @@ var BannerVars = []string{
 	"TARGET_BUILD_PDK",
 	"PDK_FUSION_PLATFORM_ZIP",
 	"PRODUCT_SOONG_NAMESPACES",
+        "QCOM_HARDWARE_VARIANT",
+        "TARGET_KERNEL_VERSION",
+        "TARGET_KERNEL_SOURCE",
+	"KERNEL_DEFCONFIG",
+        "BOARD_HAVE_QCOM_FM",
+        "PRODUCT_BOOT_JARS",
 }
 
 func Banner(make_vars map[string]string) string {
@@ -262,7 +272,7 @@ func runMakeProductConfig(ctx Context, config Config) {
 		"BUILD_BROKEN_USES_BUILD_TARGET_TEST_CONFIG",
 	}, exportEnvVars...), BannerVars...)
 
-	make_vars, err := dumpMakeVars(ctx, config, config.Arguments(), allVars, true)
+	make_vars, err := dumpMakeVars(ctx, config, config.Arguments(), allVars, true, "")
 	if err != nil {
 		ctx.Fatalln("Error dumping make vars:", err)
 	}
